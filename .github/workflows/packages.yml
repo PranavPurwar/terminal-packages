@@ -43,101 +43,77 @@ jobs:
         fetch-depth: 1000
     - name: Gather build summary
       run: |
-        if [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
-          BASE_COMMIT=$(jq --raw-output .pull_request.base.sha "$GITHUB_EVENT_PATH")
-          OLD_COMMIT=$(jq --raw-output .commits[0].id "$GITHUB_EVENT_PATH")
-          HEAD_COMMIT=$(jq --raw-output .commits[-1].id "$GITHUB_EVENT_PATH")
-          if [ "$BASE_COMMIT" = "null" ]; then
-            if [ "$OLD_COMMIT" = "$HEAD_COMMIT" ]; then
-              # Single-commit push.
-              echo "Processing commit: ${HEAD_COMMIT}"
-              CHANGED_FILES=$(git diff-tree --no-commit-id --name-only -r "${HEAD_COMMIT}")
-            else
-              # Multi-commit push.
-              OLD_COMMIT="${OLD_COMMIT}~1"
-              echo "Processing commit range: ${OLD_COMMIT}..${HEAD_COMMIT}"
-              CHANGED_FILES=$(git diff-tree --no-commit-id --name-only -r "${OLD_COMMIT}" "${HEAD_COMMIT}")
-            fi
+        BASE_COMMIT=$(jq --raw-output .pull_request.base.sha "$GITHUB_EVENT_PATH")
+        OLD_COMMIT=$(jq --raw-output .commits[0].id "$GITHUB_EVENT_PATH")
+        HEAD_COMMIT=$(jq --raw-output .commits[-1].id "$GITHUB_EVENT_PATH")
+        if [ "$BASE_COMMIT" = "null" ]; then
+          if [ "$OLD_COMMIT" = "$HEAD_COMMIT" ]; then
+            # Single-commit push.
+            echo "Processing commit: ${HEAD_COMMIT}"
+            CHANGED_FILES=$(git diff-tree --no-commit-id --name-only -r "${HEAD_COMMIT}")
           else
-            # Pull requests.
-            echo "Processing pull request #$(jq --raw-output .pull_request.number "$GITHUB_EVENT_PATH"): ${BASE_COMMIT}..HEAD"
-            CHANGED_FILES=$(git diff-tree --no-commit-id --name-only -r "${BASE_COMMIT}" "HEAD")
+            # Multi-commit push.
+            OLD_COMMIT="${OLD_COMMIT}~1"
+            echo "Processing commit range: ${OLD_COMMIT}..${HEAD_COMMIT}"
+            CHANGED_FILES=$(git diff-tree --no-commit-id --name-only -r "${OLD_COMMIT}" "${HEAD_COMMIT}")
           fi
+        else
+          # Pull requests.
+          echo "Processing pull request #$(jq --raw-output .pull_request.number "$GITHUB_EVENT_PATH"): ${BASE_COMMIT}..HEAD"
+          CHANGED_FILES=$(git diff-tree --no-commit-id --name-only -r "${BASE_COMMIT}" "HEAD")
         fi
         mkdir -p ./artifacts ./debs
         touch ./debs/.placeholder
 
-        if [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
-          # Process tag '%ci:no-build' that may be added as line to commit message.
-          # Forces CI to cancel current build with status 'passed'
-          if grep -qiP '^\s*%ci:no-build\s*$' <(git log --format="%B" -n 1 "HEAD"); then
-            tar cf artifacts/debs-${{ matrix.target_arch }}.tar debs
-            echo "[!] Force exiting as tag '%ci:no-build' was applied to HEAD commit message."
-            exit 0
-          fi
-
-          # Build local Docker image if setup scripts were changed.
-          # Useful for pull requests submitting changes for both build environment and packages.
-          if grep -qP '^scripts/(Dockerfile|properties\.sh|setup-android-sdk\.sh|setup-ubuntu\.sh)$' <<< "$CHANGED_FILES"; then
-            echo "Detected changes for environment setup scripts. Building custom Docker image now."
-            cd ./scripts
-            docker build -t ghcr.io/termux/package-builder:latest .
-            cd ..
-          fi
-
-          for repo_path in $(jq --raw-output 'del(.pkg_format) | keys | .[]' repo.json); do
-            repo=$(jq --raw-output '.["'${repo_path}'"].name' repo.json)
-            # Parse changed files and identify new packages and deleted packages.
-            # Create lists of those packages that will be passed to upload job for
-            # further processing.
-            while read -r file; do
-              if ! [[ $file == ${repo_path}/* ]]; then
-                # This file does not belong to a package, so ignore it
-                continue
-              fi
-              if [[ $file =~ ^${repo_path}/([.a-z0-9+-]*)/([.a-z0-9+-]*).subpackage.sh$ ]]; then
-                # A subpackage was modified, check if it was deleted or just updated
-                pkg=${BASH_REMATCH[1]}
-                subpkg=${BASH_REMATCH[2]}
-                if [ ! -f "${repo_path}/${pkg}/${subpkg}.subpackage.sh" ]; then
-                  echo "$subpkg" >> ./deleted_${repo}_packages.txt
-                fi
-              elif [[ $file =~ ^${repo_path}/([.a-z0-9+-]*)/.*$ ]]; then
-                # package, check if it was deleted or updated
-                pkg=${BASH_REMATCH[1]}
-                if [ -d "${repo_path}/${pkg}" ]; then
-                  echo "$pkg" >> ./built_${repo}_packages.txt
-                  # If there are subpackages we want to create a list of those
-                  # as well
-                  for file in $(find "${repo_path}/${pkg}/" -maxdepth 1 -type f -name \*.subpackage.sh | sort); do
-                    echo "$(basename "${file%%.subpackage.sh}")" >> ./built_${repo}_subpackages.txt
-                  done
-                else
-                  echo "$pkg" >> ./deleted_${repo}_packages
-                fi
-              fi
-            done<<<${CHANGED_FILES}
-          done
-        else
-          for pkg in ${{ github.event.inputs.packages }}; do
-            repo_paths=$(jq --raw-output 'del(.pkg_format) | keys | .[]' repo.json)
-            found=false
-            for repo_path in $repo_paths; do
-              repo=$(jq --raw-output '.["'${repo_path}'"].name' repo.json)
-              if [ -d "${repo_path}/${pkg}" ]; then
-                found=true
-                echo "$pkg" >> ./built_${repo}_packages.txt
-                for subpkg in $(find "${repo_path}/${pkg}/" -maxdepth 1 -type f -name \*.subpackage.sh | sort); do
-                  echo "$(basename "${subpkg%%.subpackage.sh}")" >> ./built_${repo}_subpackages.txt
-                done
-              fi
-            done
-            if [ "$found" != true ]; then
-              echo "Package '${pkg}' not found in any of the repo"
-              exit 1
-            fi
-          done
+        # Process tag '%ci:no-build' that may be added as line to commit message.
+        # Forces CI to cancel current build with status 'passed'
+        if grep -qiP '^\s*%ci:no-build\s*$' <(git log --format="%B" -n 1 "HEAD"); then
+          tar cf artifacts/debs-${{ matrix.target_arch }}.tar debs
+          echo "[!] Force exiting as tag '%ci:no-build' was applied to HEAD commit message."
+          exit 0
         fi
+        # Build local Docker image if setup scripts were changed.
+        # Useful for pull requests submitting changes for both build environment and packages.
+        if grep -qP '^scripts/(Dockerfile|properties\.sh|setup-android-sdk\.sh|setup-ubuntu\.sh)$' <<< "$CHANGED_FILES"; then
+          echo "Detected changes for environment setup scripts. Building custom Docker image now."
+          cd ./scripts
+          docker build -t ghcr.io/termux/package-builder:latest .
+          cd ..
+        fi
+
+        for repo_path in $(jq --raw-output 'del(.pkg_format) | keys | .[]' repo.json); do
+          repo=$(jq --raw-output '.["'${repo_path}'"].name' repo.json)
+          # Parse changed files and identify new packages and deleted packages.
+          # Create lists of those packages that will be passed to upload job for
+          # further processing.
+          while read -r file; do
+            if ! [[ $file == ${repo_path}/* ]]; then
+              # This file does not belong to a package, so ignore it
+              continue
+            fi
+            if [[ $file =~ ^${repo_path}/([.a-z0-9+-]*)/([.a-z0-9+-]*).subpackage.sh$ ]]; then
+              # A subpackage was modified, check if it was deleted or just updated
+              pkg=${BASH_REMATCH[1]}
+              subpkg=${BASH_REMATCH[2]}
+              if [ ! -f "${repo_path}/${pkg}/${subpkg}.subpackage.sh" ]; then
+                echo "$subpkg" >> ./deleted_${repo}_packages.txt
+              fi
+            elif [[ $file =~ ^${repo_path}/([.a-z0-9+-]*)/.*$ ]]; then
+              # package, check if it was deleted or updated
+              pkg=${BASH_REMATCH[1]}
+              if [ -d "${repo_path}/${pkg}" ]; then
+                echo "$pkg" >> ./built_${repo}_packages.txt
+                # If there are subpackages we want to create a list of those
+                # as well
+                for file in $(find "${repo_path}/${pkg}/" -maxdepth 1 -type f -name \*.subpackage.sh | sort); do
+                  echo "$(basename "${file%%.subpackage.sh}")" >> ./built_${repo}_subpackages.txt
+                done
+              else
+                echo "$pkg" >> ./deleted_${repo}_packages
+              fi
+            fi
+          done<<<${CHANGED_FILES}
+        done
 
         for repo in $(jq --raw-output 'del(.pkg_format) | .[].name' repo.json); do
           # Fix so that lists do not contain duplicates
@@ -260,51 +236,20 @@ jobs:
       uses: actions/download-artifact@v3
       with:
         path: ./
-    - name: Upload to packages.termux.dev
-      env:
-        REPOSITORY_URL: https://packages.termux.dev/aptly-api
+    - name: Upload to artifacts
       run: |
-        GITHUB_SHA=${{ github.sha }}
-        APTLY_API_AUTH=${{ secrets.APTLY_API_AUTH }}
-        GPG_PASSPHRASE=${{ secrets.GPG_PASSPHRASE }}
+        # Create an apt repository structure in a new directory
+        mkdir -p apt-repo/debs
+        mv debs/*.deb apt-repo/debs/
 
-        source scripts/aptly_api.sh
+        # Generate Packages file for the repository
+        dpkg-scanpackages apt-repo/debs /dev/null | gzip -9c > apt-repo/debs/Packages.gz
 
-        for archive in debs-*/debs-{aarch64,arm,i686,x86_64}-${{ github.sha }}.tar; do
-          tar xf "$archive"
-        done
+        # Zip the repository for upload
+        zip -r apt-repo.zip apt-repo
 
-        for repo in $(jq --raw-output 'del(.pkg_format) | keys | .[]' repo.json); do
-          export REPOSITORY_NAME=$(jq --raw-output '.["'$repo'"].name' repo.json)
-          export REPOSITORY_DISTRIBUTION=$(jq --raw-output '.["'$repo'"].distribution' repo.json)
+        # Upload the zip file to GitHub Artifacts
+        echo "Uploading apt-repo.zip to GitHub Artifacts..."
+        gh workflow run upload-artifact --repo ${{ github.repository }} -f apt-repo.zip
 
-          # Upload file to temporary directory.
-          uploaded_files=false
-          shopt -s nullglob
 
-          if [ -f debs/built_${REPOSITORY_NAME}_packages.txt ]; then
-            for filename in $(cat debs/built_${REPOSITORY_NAME}_packages.txt | sed -E 's/(..*)/debs\/\1_\*.deb debs\/\1-static_\*.deb/g'); do
-              if ! aptly_upload_file "$filename"; then
-                exit 1
-              fi
-
-              uploaded_files=true
-            done
-            shopt -u nullglob
-
-            # Publishing repository changes.
-            if [ "$uploaded_files" = "true" ]; then
-              if ! aptly_add_to_repo; then
-                exit 1
-              fi
-
-              # Usually temporary directory is deleted automatically, but in certain cases it is left.
-              aptly_delete_dir
-
-              # Final part to make changes appear in web root.
-              if ! aptly_publish_repo; then
-                exit 1
-              fi
-            fi
-          fi
-        done

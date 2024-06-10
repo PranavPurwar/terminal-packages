@@ -62,25 +62,10 @@ termux_step_pre_configure() {
 	mv $TERMUX_PREFIX/lib/libz.so $TERMUX_PREFIX/lib/libz.so.tmp
 	mv $TERMUX_PREFIX/lib/liblzma.so.$LZMA_VERSION $TERMUX_PREFIX/lib/liblzma.so.tmp
 
-	# https://github.com.itsaky.androidide/termux-packages/issues/11427
+	# https://github.org.cosmicide/termux-packages/issues/11427
 	# Fresh build conflict: liblzma -> rust
-<<<<<<< HEAD
-	# ld: error: /data/data/com.itsaky.androidide/files/usr/lib/liblzma.a(liblzma_la-common.o) is incompatible with elf64-x86-64
-	mv $TERMUX_PREFIX/lib/liblzma.a $TERMUX_PREFIX/lib/liblzma.a.tmp || true
-
-	# ld: error: undefined symbol: getloadavg
-	# >>> referenced by rand.c
-	$CC $CPPFLAGS -c $TERMUX_PKG_BUILDER_DIR/getloadavg.c
-	$AR rcu $RUST_LIBDIR/libgetloadavg.a getloadavg.o
-
-	# https://github.com/termux/termux-packages/issues/17962
-	# Android 8.x and older: CANNOT LINK EXECUTABLE "rustc": cannot locate symbol "syncfs"
-	"${CC}" ${CPPFLAGS} -c "${TERMUX_PKG_BUILDER_DIR}/syncfs.c"
-	"${AR}" rcu "${RUST_LIBDIR}/libsyncfs.a" syncfs.o
-=======
 	# ld: error: /data/data/com.termux/files/usr/lib/liblzma.a(liblzma_la-common.o) is incompatible with elf64-x86-64
 	mv "${TERMUX_PREFIX}"/lib/liblzma.a{,.tmp} || :
->>>>>>> upstream/master
 }
 
 termux_step_configure() {
